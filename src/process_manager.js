@@ -24,6 +24,9 @@ export class WorkspaceProcessManager {
   /** @type {Map<string, import('node:child_process').ChildProcessWithoutNullStreams>} */
   #runningProcesses = new Map();
 
+/** @type {'npm' | 'pnpm' | 'yarn'} */
+#packageManager = 'npm';
+
   /** @param {string} rootDir */
   constructor(rootDir) {
     this.rootDir = rootDir;
@@ -33,7 +36,22 @@ export class WorkspaceProcessManager {
     try {
       const pnpmWorkspaceFile = path.join(this.rootDir, 'pnpm-workspace.yaml');
       const packageJsonPath = path.join(this.rootDir, 'package.json');
+const yarnLockPath = path.join(this.rootDir, 'yarn.lock');
+const pnpmLockPath = path.join(this.rootDir, 'pnpm-lock.yaml');
 
+      // Detect package manager
+      if (fs.existsSync(pnpmWorkspaceFile) || fs.existsSync(pnpmLockPath)) {
+        this.#packageManager = 'pnpm';
+        p.log.info('Detected pnpm workspace');
+      } else if (fs.existsSync(yarnLockPath)) {
+        this.#packageManager = 'yarn';
+        p.log.info('Detected yarn workspace');
+      } else {
+        this.#packageManager = 'npm';
+        p.log.info('Using npm as package manager');
+      }
+
+      // Detect workspace projects
       if (fs.existsSync(pnpmWorkspaceFile)) {
         await this.#detectPnpmProjects();
       }
@@ -138,16 +156,26 @@ export class WorkspaceProcessManager {
     projects.forEach(project => {
       const processKey = `${project.name}:${scriptName}`;
       
-      p.log.info(`Running ${processKey}`);
+      p.log.info(`Running ${processKey} with ${this.#packageManager}`);
       
-      const process = spawn('npm', ['run', scriptName], {
+      // Use the detected package manager
+      const childProcess = spawn(this.#packageManager, ['run', scriptName], {
         cwd: project.path,
-        stdio: 'inherit'
+        stdio: 'inherit',
+        // This ensures the process gets its own process group ID on Unix systems
+        detached: process.platform !== 'win32'
       });
 
-      this.#runningProcesses.set(processKey, process);
+// Store a reference to the original stdio streams for cleanup
+childProcess._originalStdio = {
+  stdout: childProcess.stdout,
+  stderr: childProcess.stderr
+};
 
-      process.on('close', (code) => {
+      this.#runningProcesses.set(processKey, childProcess);
+
+      // Handle both close and exit events
+      childProcess.on('close', (code) => {
         console.log(
           code === 0 
             ? chalk.green(`Process ${processKey} completed successfully`) 
@@ -155,26 +183,81 @@ export class WorkspaceProcessManager {
         );
         this.#runningProcesses.delete(processKey);
       });
+    
+    // Also handle error events to prevent uncaught exceptions
+    childProcess.on('error', (err) => {
+      console.error(chalk.red(`Process ${processKey} error:`), err);
+      this.#runningProcesses.delete(processKey);
+    });
     });
   }
 
   stopAllProcesses() {
-    this.#runningProcesses.forEach((process, key) => {
+    const processes = [...this.#runningProcesses.entries()];
+    
+    for (const [key, childProcess] of processes) {
       console.log(chalk.yellow(`Stopping process: ${key}`));
-      // Force kill with SIGKILL if needed
+      
       try {
-        process.kill('SIGTERM');
-        // Give it a moment to terminate gracefully
-        setTimeout(() => {
-          if (process.killed === false) {
-            process.kill('SIGKILL');
+        // Track if the process has been terminated
+        let isTerminated = false;
+        
+        // Detach stdio to swallow all output after termination
+        if (childProcess.stdout) childProcess.stdout.destroy();
+        if (childProcess.stderr) childProcess.stderr.destroy();
+        
+        // Set up listeners to know when the process is actually terminated
+        const onExit = () => {
+          isTerminated = true;
+          this.#runningProcesses.delete(key);
+          childProcess.removeAllListeners();
+        };
+        
+        childProcess.once('close', onExit);
+        childProcess.once('exit', onExit);
+        
+        if (process.platform !== 'win32' && childProcess.pid) {
+          // On Unix-like systems, kill the entire process group to handle child processes
+          try {
+            // Kill the process group with SIGTERM
+            process.kill(-childProcess.pid, 'SIGTERM');
+          } catch (e) {
+            // If process group kill fails, fall back to regular kill
+            childProcess.kill('SIGTERM');
           }
-        }, 500);
+        } else {
+          // On Windows or if no pid, use regular kill
+          childProcess.kill('SIGTERM');
+        }
+        
+        // Give it a moment to terminate gracefully, then force kill if needed
+        setTimeout(() => {
+          if (!isTerminated) {
+            try {
+              console.log(chalk.yellow(`Force killing process: ${key}`));
+              
+              if (process.platform !== 'win32' && childProcess.pid) {
+                // Kill the process group with SIGKILL
+                try {
+                  process.kill(-childProcess.pid, 'SIGKILL');
+                } catch (e) {
+                  // Fall back to regular kill
+                  childProcess.kill('SIGKILL');
+                }
+              } else {
+                childProcess.kill('SIGKILL');
+              }
+            } catch (e) {
+              // Process might have exited just before this
+              console.log(chalk.gray(`Process ${key} already exited`));
+            }
+          }
+        }, 1000);
       } catch (error) {
         console.error(chalk.red(`Error stopping process ${key}:`), error);
-      }
       this.#runningProcesses.delete(key);
-    });
+      }
+      }
   }
 
   async interactiveMenu() {
