@@ -268,36 +268,58 @@ export class WorkspaceProcessManager {
   }
 
   async #runScriptsInteractively() {
-    const availableScripts = this.getAllAvailableScripts();
-    
-    const selectedScripts = await p.multiselect({
-      message: 'Select scripts to run',
-      options: Object.keys(availableScripts).map(scriptName => ({
-        value: scriptName,
-        label: `${scriptName} (${availableScripts[scriptName].map(p => p.name).join(', ')})`
+    // First, select the projects to work with
+    const selectedProjects = await p.multiselect({
+      message: 'Select projects to run scripts in',
+      options: this.#workspaceProjects.map(project => ({
+        value: project,
+        label: project.name
       }))
     });
 
-    if (p.isCancel(selectedScripts)) {
+    if (p.isCancel(selectedProjects)) {
       this.#handleCancel();
       return;
     }
 
-    for (const scriptName of selectedScripts) {
-      const selectedProjects = await p.multiselect({
-        message: `Select projects to run "${scriptName}"`,
-        options: availableScripts[scriptName].map(project => ({
-          value: project,
-          label: project.name
+    // Collect all script selections before running anything
+    const projectScriptSelections = [];
+
+    // For each selected project, choose which scripts to run
+    for (const project of selectedProjects) {
+      const availableScripts = Object.keys(project.packageJson.scripts);
+      
+      if (availableScripts.length === 0) {
+        p.log.warning(`No scripts available in ${project.name}`);
+        continue;
+      }
+
+      const selectedScripts = await p.multiselect({
+        message: `Select scripts to run in ${chalk.cyan(project.name)}`,
+        options: availableScripts.map(scriptName => ({
+          value: scriptName,
+          label: `${scriptName}: ${project.packageJson.scripts[scriptName]}`
         }))
       });
 
-      if (p.isCancel(selectedProjects)) {
+      if (p.isCancel(selectedScripts)) {
         this.#handleCancel();
         return;
       }
 
-      this.runScript(scriptName, selectedProjects);
+      if (selectedScripts.length > 0) {
+        projectScriptSelections.push({
+          project,
+          scripts: selectedScripts
+        });
+      }
+    }
+
+    // Now run all selected scripts
+    for (const { project, scripts } of projectScriptSelections) {
+      for (const scriptName of scripts) {
+        this.runScript(scriptName, [project]);
+      }
     }
   }
 }
