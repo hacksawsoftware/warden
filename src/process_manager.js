@@ -169,16 +169,16 @@ export class WorkspaceProcessManager {
 			// Use the detected package manager
 			const childProcess = spawn(this.#packageManager, ["run", scriptName], {
 				cwd: project.path,
-				stdio: "inherit",
-				// This ensures the process gets its own process group ID on Unix systems
-				detached: process.platform !== "win32",
+				// Use pipe instead of inherit to have more control over stdio
+				stdio: ["pipe", "pipe", "pipe"],
+				// Always use detached to ensure process groups on all platforms
+				detached: true,
 			});
 
-			// Store a reference to the original stdio streams for cleanup
-			childProcess._originalStdio = {
-				stdout: childProcess.stdout,
-				stderr: childProcess.stderr,
-			};
+			// Pipe the child process stdio to parent process
+			if (childProcess.stdout) childProcess.stdout.pipe(process.stdout);
+			if (childProcess.stderr) childProcess.stderr.pipe(process.stderr);
+			if (childProcess.stdin) process.stdin.pipe(childProcess.stdin);
 
 			this.#runningProcesses.set(processKey, childProcess);
 
@@ -200,72 +200,110 @@ export class WorkspaceProcessManager {
 		}
 	}
 
-	stopAllProcesses() {
+	async stopAllProcesses() {
 		const processes = [...this.#runningProcesses.entries()];
+		if (processes.length === 0) {
+			return;
+		}
+
+		console.log(
+			chalk.yellow(`Stopping ${processes.length} running processes...`),
+		);
+
+		// Create a promise that resolves when all processes are terminated
+		const terminationPromises = [];
 
 		for (const [key, childProcess] of processes) {
 			console.log(chalk.yellow(`Stopping process: ${key}`));
 
-			try {
-				// Track if the process has been terminated
-				let isTerminated = false;
-
-				// Detach stdio to swallow all output after termination
-				if (childProcess.stdout) childProcess.stdout.destroy();
-				if (childProcess.stderr) childProcess.stderr.destroy();
-
-				// Set up listeners to know when the process is actually terminated
-				const onExit = () => {
-					isTerminated = true;
-					this.#runningProcesses.delete(key);
-					childProcess.removeAllListeners();
-				};
-
-				childProcess.once("close", onExit);
-				childProcess.once("exit", onExit);
-
-				if (process.platform !== "win32" && childProcess.pid) {
-					// On Unix-like systems, kill the entire process group to handle child processes
-					try {
-						// Kill the process group with SIGTERM
-						process.kill(-childProcess.pid, "SIGTERM");
-					} catch (e) {
-						// If process group kill fails, fall back to regular kill
-						childProcess.kill("SIGTERM");
+			const terminationPromise = new Promise((resolve) => {
+				try {
+					// Clean up stdio pipes first to prevent write-after-end errors
+					if (childProcess.stdout) {
+						childProcess.stdout.unpipe(process.stdout);
+						childProcess.stdout.destroy();
 					}
-				} else {
-					// On Windows or if no pid, use regular kill
-					childProcess.kill("SIGTERM");
-				}
+					if (childProcess.stderr) {
+						childProcess.stderr.unpipe(process.stderr);
+						childProcess.stderr.destroy();
+					}
+					if (childProcess.stdin) {
+						process.stdin.unpipe(childProcess.stdin);
+						childProcess.stdin.end();
+					}
 
-				// Give it a moment to terminate gracefully, then force kill if needed
-				setTimeout(() => {
-					if (!isTerminated) {
+					// Set up listeners to know when the process is actually terminated
+					const onExit = () => {
+						this.#runningProcesses.delete(key);
+						childProcess.removeAllListeners();
+						resolve();
+					};
+
+					childProcess.once("close", onExit);
+					childProcess.once("exit", onExit);
+
+					// Kill the process or process group
+					if (process.platform !== "win32" && childProcess.pid) {
 						try {
-							console.log(chalk.yellow(`Force killing process: ${key}`));
+							// On Unix, negative PID kills the process group
+							process.kill(-childProcess.pid, "SIGTERM");
+						} catch (e) {
+							// If process group kill fails, try direct kill
+							try {
+								childProcess.kill("SIGTERM");
+							} catch (err) {
+								// Process might already be gone
+								onExit();
+							}
+						}
+					} else if (childProcess.pid) {
+						// On Windows, use tree-kill or similar approach
+						try {
+							// Windows doesn't support process groups the same way
+							// so we use the regular kill and rely on the parent-child relationship
+							childProcess.kill("SIGTERM");
+						} catch (err) {
+							// Process might already be gone
+							onExit();
+						}
+					} else {
+						// No PID, process might already be gone
+						onExit();
+					}
 
-							if (process.platform !== "win32" && childProcess.pid) {
-								// Kill the process group with SIGKILL
-								try {
+					// Force kill after timeout
+					setTimeout(() => {
+						if (this.#runningProcesses.has(key)) {
+							console.log(chalk.yellow(`Force killing process: ${key}`));
+							try {
+								if (process.platform !== "win32" && childProcess.pid) {
 									process.kill(-childProcess.pid, "SIGKILL");
-								} catch (e) {
-									// Fall back to regular kill
+								} else if (childProcess.pid) {
 									childProcess.kill("SIGKILL");
 								}
-							} else {
-								childProcess.kill("SIGKILL");
+							} catch (e) {
+								// Process might have exited just before this
+								console.log(chalk.gray(`Process ${key} already exited`));
+							} finally {
+								// Ensure we resolve the promise even if kill fails
+								onExit();
 							}
-						} catch (e) {
-							// Process might have exited just before this
-							console.log(chalk.gray(`Process ${key} already exited`));
 						}
-					}
-				}, 1000);
-			} catch (error) {
-				console.error(chalk.red(`Error stopping process ${key}:`), error);
-				this.#runningProcesses.delete(key);
-			}
+					}, 2000);
+				} catch (error) {
+					console.error(chalk.red(`Error stopping process ${key}:`), error);
+					this.#runningProcesses.delete(key);
+					resolve();
+				}
+			});
+
+			terminationPromises.push(terminationPromise);
 		}
+
+		// Return a promise that resolves when all processes are terminated
+		return Promise.all(terminationPromises).then(() => {
+			console.log(chalk.green("All processes terminated"));
+		});
 	}
 
 	async interactiveMenu() {

@@ -37,12 +37,17 @@ async function main() {
 		spinner.succeed("Workspace detected!");
 
 		// Handle Ctrl+C
-		process.on("SIGINT", () => {
+		process.on("SIGINT", async () => {
 			console.log(chalk.yellow("\nReceived SIGINT (Ctrl+C). Cleaning up..."));
 			if (processManager) {
-				processManager.stopAllProcesses();
+				// Wait for all processes to be terminated before exiting
+				await processManager.stopAllProcesses();
+				console.log(chalk.green("Cleanup complete. Exiting..."));
 			}
-			process.exit(0);
+			// Give a small delay to ensure all console output is flushed
+			setTimeout(() => {
+				process.exit(0);
+			}, 100);
 		});
 
 		await processManager.interactiveMenu();
