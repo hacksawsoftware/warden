@@ -5,7 +5,21 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { WorkspaceProcessManager } from './process_manager.js';
 
+async function intro() {
+  console.log(chalk.cyan(`
+ ██╗    ██╗ █████╗ ██████╗ ██████╗ ███████╗███╗   ██╗
+ ██║    ██║██╔══██╗██╔══██╗██╔══██╗██╔════╝████╗  ██║
+ ██║ █╗ ██║███████║██████╔╝██║  ██║█████╗  ██╔██╗ ██║
+ ██║███╗██║██╔══██║██╔══██╗██║  ██║██╔══╝  ██║╚██╗██║
+ ╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║
+  ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝
+`));
+  console.log(chalk.gray('  Monorepo Script Runner'));
+  console.log('');
+}
+
 async function main() {
+  await intro();
   const spinner = ora('Detecting workspace projects...').start();
   let processManager;
   
@@ -13,7 +27,7 @@ async function main() {
     processManager = new WorkspaceProcessManager(process.cwd());
     await processManager.detectWorkspaceProjects();
     
-    spinner.succeed('Workspace projects detected');
+    spinner.succeed('Workspace detected!');
     
     // Handle Ctrl+C
     process.on('SIGINT', () => {
