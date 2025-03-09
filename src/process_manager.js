@@ -184,9 +184,9 @@ export class WorkspaceProcessManager {
       const action = await p.select({
         message: 'Choose an action',
         options: [
+          { value: 'run-scripts', label: 'Run Scripts' },
           { value: 'list-projects', label: 'List Projects' },
           { value: 'list-scripts', label: 'List Available Scripts' },
-          { value: 'run-scripts', label: 'Run Scripts' },
           { value: 'stop-processes', label: 'Stop All Processes' },
           { value: 'exit', label: 'Exit' }
         ]
