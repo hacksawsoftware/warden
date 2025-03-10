@@ -32,7 +32,9 @@ export class WorkspaceProcessManager {
 		this.rootDir = rootDir;
 	}
 
+	/** @returns {Promise<string | undefined>} */
 	async detectWorkspaceProjects() {
+		let message;
 		try {
 			const pnpmWorkspaceFile = path.join(this.rootDir, "pnpm-workspace.yaml");
 			const packageJsonPath = path.join(this.rootDir, "package.json");
@@ -42,13 +44,13 @@ export class WorkspaceProcessManager {
 			// Detect package manager
 			if (fs.existsSync(pnpmWorkspaceFile) || fs.existsSync(pnpmLockPath)) {
 				this.#packageManager = "pnpm";
-				p.log.info("Detected pnpm workspace");
+				message = "Detected pnpm workspace";
 			} else if (fs.existsSync(yarnLockPath)) {
 				this.#packageManager = "yarn";
-				p.log.info("Detected yarn workspace");
+				message = "Detected yarn workspace";
 			} else {
 				this.#packageManager = "npm";
-				p.log.info("Using npm as package manager");
+				message = "Defaulting to npm workspace";
 			}
 
 			// Detect workspace projects
@@ -63,10 +65,13 @@ export class WorkspaceProcessManager {
 				if (packageJson.workspaces) {
 					await this.#detectNpmProjects(packageJson.workspaces);
 				}
+
+				return message;
 			}
 		} catch (error) {
 			p.log.error(`Error detecting workspace projects: ${error}`);
 		}
+		return undefined;
 	}
 
 	/** @private */
@@ -307,8 +312,6 @@ export class WorkspaceProcessManager {
 	}
 
 	async interactiveMenu() {
-		p.intro(chalk.cyan("Workspace Process Manager"));
-
 		while (true) {
 			const action = await p.select({
 				message: "Choose an action",

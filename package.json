@@ -1,7 +1,7 @@
 {
 	"name": "@hacksaw/warden",
-	"version": "0.0.1",
-	"description": "A process manager for JavaScript workspaces",
+	"version": "0.0.1-alpha",
+	"description": "A JavaScript Monorepo Script Runner",
 	"type": "module",
 	"bin": {
 		"warden": "./src/index.js"
@@ -16,7 +16,8 @@
 	"keywords": [
 		"cli",
 		"workspace-management",
-		"process-manager"
+		"process-manager",
+		"script-runner"
 	],
 	"author": {
 		"name": "Jacob Stordahl",

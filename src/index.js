@@ -21,8 +21,10 @@ async function intro() {
                              ░                        
 `),
 	);
-	console.log(chalk.gray("  Monorepo Script Runner"));
-	console.log("");
+	console.log(chalk.gray("  Monorepo Script Runner\n"));
+	console.log(
+		chalk.yellow("  Warden is in early development; use at your discretion\n"),
+	);
 }
 
 async function main() {
@@ -32,9 +34,9 @@ async function main() {
 
 	try {
 		processManager = new WorkspaceProcessManager(process.cwd());
-		await processManager.detectWorkspaceProjects();
+		const message = await processManager.detectWorkspaceProjects();
 
-		spinner.succeed("Workspace detected!");
+		if (message) spinner.succeed(message);
 
 		// Handle Ctrl+C
 		process.on("SIGINT", async () => {
@@ -61,7 +63,6 @@ async function main() {
 	}
 }
 
-// Only run main if this is the main module
 main().catch((error) => {
 	console.error(chalk.red("Unhandled error:"), error);
 	process.exit(1);
